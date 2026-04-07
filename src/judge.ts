@@ -64,7 +64,7 @@ async function callLiteLLM(
     throw new Error(`LiteLLM error: ${response.status} ${errorText}`);
   }
   
-  return response.json();
+  return response.json() as Promise<ChatResponse>;
 }
 
 export async function validateResponse(
