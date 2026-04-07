@@ -85,7 +85,7 @@ export function loadConfig(configPath?: string): SquireConfig {
   for (const path of paths) {
     if (fs.existsSync(path)) {
       const content = fs.readFileSync(path, 'utf-8');
-      const parsed = yaml.parse(content);
+      const parsed = yaml.load(content);
       return expandEnvVars(parsed) as SquireConfig;
     }
   }
