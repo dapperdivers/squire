@@ -69,10 +69,13 @@ async function callLiteLLM(
   
   logger.debug({ url, model: request.model }, 'Calling LiteLLM backend');
   
+  // Ensure non-streaming response (LiteLLM defaults to SSE if stream not specified)
+  const requestWithStream = { ...request, stream: false };
+  
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify(request),
+    body: JSON.stringify(requestWithStream),
   });
   
   if (!response.ok) {
