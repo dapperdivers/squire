@@ -1,5 +1,5 @@
 import fs from 'fs';
-import yaml from 'yaml';
+import yaml from 'js-yaml';
 
 export interface EscalationStep {
   model: string;

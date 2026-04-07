@@ -1,15 +1,11 @@
 import { Registry, Counter, Histogram, Gauge } from 'prom-client';
-import type { SquireConfig } from './config.js';
 
-export function createMetrics(config: SquireConfig) {
+export function createMetrics(serviceName: string) {
   const register = new Registry();
   
-  const defaultLabels = {
-    realm: config.server.realm,
-    ...config.metrics.labels,
-  };
-  
-  register.setDefaultLabels(defaultLabels);
+  register.setDefaultLabels({
+    service: serviceName,
+  });
   
   const requestsTotal = new Counter({
     name: 'squire_requests_total',
@@ -39,24 +35,11 @@ export function createMetrics(config: SquireConfig) {
     registers: [register],
   });
   
-  const requestCostTotal = new Counter({
-    name: 'squire_request_cost_total',
-    help: 'Total cost of LLM requests (USD)',
-    labelNames: ['model'],
-    registers: [register],
-  });
-  
   const requestDuration = new Histogram({
     name: 'squire_request_duration_seconds',
     help: 'Request duration in seconds',
     labelNames: ['model', 'result'],
     buckets: [0.1, 0.5, 1, 2, 5, 10, 30],
-    registers: [register],
-  });
-  
-  const activeRequests = new Gauge({
-    name: 'squire_active_requests',
-    help: 'Number of requests currently being processed',
     registers: [register],
   });
   
@@ -66,9 +49,7 @@ export function createMetrics(config: SquireConfig) {
     validationScore,
     escalationsTotal,
     validationCostTotal,
-    requestCostTotal,
     requestDuration,
-    activeRequests,
   };
 }
 

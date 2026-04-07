@@ -1,10 +1,9 @@
 import pino from 'pino';
-import type { SquireConfig } from './config.js';
 
-export function createLogger(config: SquireConfig) {
+export function createLogger(level: string, format: string) {
   return pino({
-    level: config.logging.level,
-    transport: config.logging.format === 'pretty' ? {
+    level,
+    transport: format === 'pretty' ? {
       target: 'pino-pretty',
       options: {
         colorize: true,
