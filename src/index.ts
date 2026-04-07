@@ -2,7 +2,7 @@ import express from 'express';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { createMetrics } from './metrics.js';
-import { executeWithEscalation } from './judge.js';
+import { executeWithRouting } from './router.js';
 import type { ChatRequest } from './judge.js';
 import fs from 'fs/promises';
 import { existsSync, mkdirSync } from 'fs';
@@ -29,15 +29,15 @@ app.post('/v1/chat/completions', async (req, res) => {
   }, 'Incoming chat request');
   
   try {
-    const result = await executeWithEscalation(request, config, logger, metrics);
+    const result = await executeWithRouting(request, config, logger);
     
-    // Log validation decision (async, don't block response)
-    if (config.logging.validationLog.enabled && result.finalScore !== null) {
+    // Log routing decision (async, don't block response)
+    if (config.logging.validationLog.enabled) {
       const logEntry = {
         timestamp: new Date().toISOString(),
-        model: request.model,
-        attempts: result.attempts,
-        finalScore: result.finalScore,
+        originalModel: request.model,
+        routedModel: result.routedModel,
+        complexity: result.complexity,
         question: request.messages[request.messages.length - 1]?.content || '',
         response: result.response.choices[0]?.message?.content || '',
       };
@@ -54,7 +54,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             JSON.stringify(logEntry) + '\n'
           );
         } catch (e) {
-          logger.warn({ error: e }, 'Failed to write validation log');
+          logger.warn({ error: e }, 'Failed to write routing log');
         }
       })();
     }
@@ -82,8 +82,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 const apiServer = app.listen(config.server.port, () => {
   logger.info({ port: config.server.port }, '🛡️  Squire standing ready');
   logger.info({ backend: config.backend.url }, '   Backend: LiteLLM');
-  logger.info({ validation: config.validation.enabled }, '   Validation enabled');
-  logger.info({ escalation: config.escalation.enabled }, '   Escalation enabled');
+  logger.info('   Mode: Intelligent routing (Haiku classifier)');
   logger.info({ metrics: config.metrics.enabled }, '   Metrics enabled');
 });
 
