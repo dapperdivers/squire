@@ -89,7 +89,7 @@ export async function validateResponse(
   
   logger.debug({ judgeModel: config.validation.judgeModel }, 'Validating response');
   
-  const judgeResponse = await callLiteLLM(
+  const judgeResponse: ChatResponse = await callLiteLLM(
     config.litellm.endpoint,
     config.litellm.apiKey,
     judgeRequest,
