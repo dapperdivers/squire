@@ -199,8 +199,19 @@ export async function executeWithEscalation(
   
   // Check skip filters
   if (shouldSkipValidation(request, config)) {
-    logger.info({ model: originalModel }, 'Skipping validation (filter matched), passing through');
-    const response = await callLiteLLM(config.backend.url, config.backend.apiKey, request, logger);
+    // If model has escalation path, use first tier (router model names don't exist in LiteLLM)
+    const escalationPath = config.escalation.paths[originalModel];
+    const modelToUse = escalationPath && escalationPath.length > 0 
+      ? escalationPath[0].model 
+      : originalModel;
+    
+    logger.info({ 
+      model: originalModel, 
+      resolvedTo: modelToUse 
+    }, 'Skipping validation (filter matched), passing through');
+    
+    const passthroughRequest = { ...request, model: modelToUse };
+    const response = await callLiteLLM(config.backend.url, config.backend.apiKey, passthroughRequest, logger);
     metrics.requestsTotal.inc({ model: originalModel, result: 'passthrough' });
     return { response, attempts: 1, finalScore: null };
   }
