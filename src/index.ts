@@ -62,10 +62,16 @@ app.post('/v1/chat/completions', async (req, res) => {
     res.json(result.response);
     
   } catch (error) {
-    logger.error({ error }, 'Request failed');
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    logger.error({ 
+      error: errorMessage,
+      stack: errorStack,
+      model: request.model 
+    }, 'Request failed');
     res.status(500).json({
       error: {
-        message: error instanceof Error ? error.message : 'Internal server error',
+        message: errorMessage,
         type: 'squire_error',
       },
     });
