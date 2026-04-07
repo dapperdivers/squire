@@ -116,7 +116,9 @@ export async function validateResponse(
     logger
   );
   
-  const judgeOutput = judgeResponse.choices[0]?.message?.content || '';
+  const judgeOutput = judgeResponse.choices[0]?.message?.content 
+    ? normalizeContent(judgeResponse.choices[0].message.content) 
+    : '';
   
   // Parse JSON output
   let parsed: { score: number; reasoning: string };
@@ -247,7 +249,9 @@ export async function executeWithEscalation(
       metrics.requestDuration.observe({ model: step.model, result: 'success' }, duration);
       
       lastResponse = response;
-      const responseText = response.choices[0]?.message?.content || '';
+      const responseText = response.choices[0]?.message?.content
+        ? normalizeContent(response.choices[0].message.content)
+        : '';
       
       // Terminal model or validation disabled?
       if (step.threshold === null || !config.validation.enabled) {
