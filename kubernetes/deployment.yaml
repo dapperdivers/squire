@@ -12,7 +12,7 @@ data:
       realm: "roundtable"
     
     litellm:
-      endpoint: "http://litellm.ai.svc.cluster.local:4000"
+      endpoint: "http://litellm-backend.ai.svc.cluster.local:4002"
       apiKey: "${LITELLM_API_KEY}"
     
     validation:

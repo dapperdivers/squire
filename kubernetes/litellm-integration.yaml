@@ -1,0 +1,196 @@
+# LiteLLM Integration for Squire
+# 
+# Architecture:
+# Knights → LiteLLM (port 4000) → Squire (port 4001) → LiteLLM Backend (port 4002)
+#
+# Flow:
+# 1. Knight requests "smart" or "tim" from LiteLLM
+# 2. LiteLLM routes to Squire (validation proxy)
+# 3. Squire validates response quality
+# 4. If poor: Squire escalates to stronger model
+# 5. Squire queries LiteLLM backend for actual LLM calls
+# 6. Return validated response to knight
+#
+# This avoids circular dependency by having TWO LiteLLM services:
+# - litellm (4000): Public endpoint with Squire routing
+# - litellm-backend (4002): Direct models, used by Squire
+
+---
+# Backend LiteLLM Service (for Squire to call)
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm-backend
+  namespace: ai
+  labels:
+    app: litellm
+    variant: backend
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 4002
+    targetPort: 4000  # Points to same litellm pod, different service name
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: litellm
+
+---
+# Updated LiteLLM ConfigMap with Squire Routing
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: ai
+data:
+  config.yaml: |
+    # LiteLLM Proxy Configuration
+    # Enhanced with Squire quality validation layer
+
+    model_list:
+      # ── Tier 1: Local (Free) ──────────────────────────────────────
+      - model_name: local/gemma4-26b
+        litellm_params:
+          model: ollama/gemma4:26b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 600
+          extra_body:
+            think: false
+        model_info:
+          description: "Local Gemma 4 26B A4B MoE — 3x P100 GPUs, 256K context"
+
+      - model_name: local/gemma4-e4b
+        litellm_params:
+          model: ollama/gemma4:e4b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 120
+          extra_body:
+            think: false
+        model_info:
+          description: "Local Gemma 4 E4B — lightweight, single GPU"
+
+      # ── Tier 2: Catch-all aliases → local ─────────────────────────
+      - model_name: gpt-3.5-turbo
+        litellm_params:
+          model: ollama/gemma4:26b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 300
+          extra_body:
+            think: false
+
+      - model_name: gpt-4
+        litellm_params:
+          model: ollama/gemma4:26b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 300
+          extra_body:
+            think: false
+
+      - model_name: claude-3-5-sonnet-20241022
+        litellm_params:
+          model: ollama/gemma4:26b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 300
+          extra_body:
+            think: false
+
+      - model_name: claude-sonnet-4-20250514
+        litellm_params:
+          model: ollama/gemma4:26b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 300
+          extra_body:
+            think: false
+
+      # ── Tier 3: Anthropic Cloud (Paid) ────────────────────────────
+      - model_name: anthropic/claude-sonnet-4-5
+        litellm_params:
+          model: anthropic/claude-sonnet-4-5
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 600
+        model_info:
+          mode: chat
+          supports_vision: true
+          supports_function_calling: true
+
+      - model_name: anthropic/claude-opus-4-6
+        litellm_params:
+          model: anthropic/claude-opus-4-6
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 600
+        model_info:
+          mode: chat
+          supports_vision: true
+          supports_function_calling: true
+
+      - model_name: anthropic/claude-haiku-4-6
+        litellm_params:
+          model: anthropic/claude-haiku-4-6
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 300
+        model_info:
+          mode: chat
+          supports_function_calling: true
+
+      - model_name: sonnet
+        litellm_params:
+          model: anthropic/claude-sonnet-4-5
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 600
+
+      - model_name: opus
+        litellm_params:
+          model: anthropic/claude-opus-4-6
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 600
+
+      - model_name: haiku
+        litellm_params:
+          model: anthropic/claude-haiku-4-6
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 300
+
+      # ── 🛡️ SQUIRE-VALIDATED MODELS ──────────────────────────────────
+      # These route through Squire for quality validation + auto-escalation
+      
+      # Smart: Validated general purpose (knights)
+      # Squire tries: Gemma → Haiku → Sonnet (with quality checks)
+      - model_name: smart
+        litellm_params:
+          model: openai/smart  # Pass-through to Squire
+          api_base: http://squire.ai.svc.cluster.local:4001/v1
+          api_key: not-needed  # Squire handles auth to LiteLLM backend
+          timeout: 900  # Allow time for escalation
+        model_info:
+          description: "🛡️ Squire-validated: Gemma → Haiku → Sonnet with quality checks"
+
+      # Tim: Validated premium routing (OpenClaw)
+      # Squire tries: Haiku → Sonnet → Opus (with quality checks)
+      - model_name: tim
+        litellm_params:
+          model: openai/tim  # Pass-through to Squire
+          api_base: http://squire.ai.svc.cluster.local:4001/v1
+          api_key: not-needed
+          timeout: 900
+        model_info:
+          description: "🛡️ Squire-validated: Haiku → Sonnet → Opus with quality checks"
+
+    router_settings:
+      routing_strategy: simple-shuffle
+      num_retries: 2
+      timeout: 300
+      retry_after: 5
+
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+
+    litellm_settings:
+      set_verbose: false
+      json_logs: true
+      request_timeout: 600
+      drop_params: true
+      cache: true
+      cache_params:
+        type: redis
+        host: dragonfly.database.svc.cluster.local
+        port: 6379
