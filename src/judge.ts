@@ -153,7 +153,14 @@ function shouldSkipValidation(request: ChatRequest, config: SquireConfig): boole
     return true;
   }
   
-  const question = lastMessage.content.toLowerCase();
+  // Handle both string and array content (OpenAI API supports both)
+  const contentText = typeof lastMessage.content === 'string' 
+    ? lastMessage.content 
+    : Array.isArray(lastMessage.content)
+      ? lastMessage.content.map(part => typeof part === 'object' && 'text' in part ? part.text : '').join(' ')
+      : '';
+  
+  const question = contentText.toLowerCase();
   
   // Too short
   if (question.length < config.filters.skipIf.questionLengthLessThan) {
