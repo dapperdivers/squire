@@ -9,15 +9,14 @@ data:
     server:
       port: 4001
       name: "squire"
-      realm: "roundtable"
     
-    litellm:
-      endpoint: "http://litellm-backend.ai.svc.cluster.local:4002"
+    backend:
+      url: "http://litellm.ai.svc.cluster.local:4000"
       apiKey: "${LITELLM_API_KEY}"
     
     validation:
       enabled: true
-      judgeModel: "anthropic/claude-haiku-4-6"
+      judgeModel: "claude-haiku"
       threshold: 70
       judgePrompt: |
         You are a quality validator for the Round Table. Rate this response 0-100:
@@ -36,31 +35,29 @@ data:
       maxAttempts: 3
       paths:
         smart:
-          - model: "ollama/gemma4:26b"
+          - model: "gemma-local"
             threshold: 70
-          - model: "anthropic/claude-haiku-4-6"
+          - model: "claude-haiku"
             threshold: 70
-          - model: "anthropic/claude-sonnet-4-5"
+          - model: "claude-sonnet"
             threshold: null
         
         tim:
-          - model: "anthropic/claude-haiku-4-6"
+          - model: "claude-haiku"
             threshold: 70
-          - model: "anthropic/claude-sonnet-4-5"
+          - model: "claude-sonnet"
             threshold: 70
-          - model: "anthropic/claude-opus-4-6"
+          - model: "claude-opus"
             threshold: null
         
-        "anthropic/claude-opus-4-6":
-          - model: "anthropic/claude-opus-4-6"
+        claude-opus:
+          - model: "claude-opus"
             threshold: null
     
     filters:
       validateModels:
         - "smart"
         - "tim"
-        - "ollama/*"
-        - "anthropic/claude-haiku-4-6"
       
       skipIf:
         questionLengthLessThan: 20
@@ -75,15 +72,13 @@ data:
       enabled: true
       port: 9090
       path: "/metrics"
-      labels:
-        realm: "roundtable"
-        deployment: "production"
     
     logging:
       level: "info"
       format: "json"
       validationLog:
-        enabled: false
+        enabled: true
+        path: "/var/log/squire/validation.jsonl"
 
 ---
 apiVersion: apps/v1
@@ -133,14 +128,12 @@ spec:
             secretKeyRef:
               name: litellm-secret
               key: LITELLM_MASTER_KEY
-        - name: REALM
-          value: "roundtable"
-        - name: DEPLOYMENT
-          value: "production"
         volumeMounts:
         - name: config
           mountPath: /etc/squire
           readOnly: true
+        - name: logs
+          mountPath: /var/log/squire
         resources:
           requests:
             cpu: 100m
@@ -168,6 +161,8 @@ spec:
       - name: config
         configMap:
           name: squire-config
+      - name: logs
+        emptyDir: {}
       restartPolicy: Always
 
 ---

@@ -1,16 +1,17 @@
-# Squire - Quality Sentinel Configuration
+# Squire Configuration - Slim Version
+# Quality gate + escalation. LiteLLM handles everything else.
+
 server:
   port: 4001
   name: "squire"
-  realm: "roundtable"
 
-litellm:
-  endpoint: "${LITELLM_ENDPOINT:-http://litellm.ai.svc.cluster.local:4000}"
+backend:
+  url: "http://litellm.ai.svc.cluster.local:4000"
   apiKey: "${LITELLM_API_KEY}"
 
 validation:
   enabled: true
-  judgeModel: "anthropic/claude-haiku-4-6"
+  judgeModel: "claude-haiku"           # LiteLLM model alias
   threshold: 70
   judgePrompt: |
     You are a quality validator for the Round Table. Rate this response 0-100:
@@ -28,36 +29,36 @@ escalation:
   enabled: true
   maxAttempts: 3
   paths:
-    # Knights use 'smart' router
+    # Smart: Cost-optimized path for knights
     smart:
-      - model: "ollama/gemma4:26b"
+      - model: "gemma-local"
         threshold: 70
-      - model: "anthropic/claude-haiku-4-6"
+      - model: "claude-haiku"
         threshold: 70
-      - model: "anthropic/claude-sonnet-4-5"
-        threshold: null
+      - model: "claude-sonnet"
+        threshold: null         # Terminal model, accept anything
     
-    # OpenClaw uses 'tim' router
+    # Tim: Premium path for OpenClaw
     tim:
-      - model: "anthropic/claude-haiku-4-6"
+      - model: "claude-haiku"
         threshold: 70
-      - model: "anthropic/claude-sonnet-4-5"
+      - model: "claude-sonnet"
         threshold: 70
-      - model: "anthropic/claude-opus-4-6"
+      - model: "claude-opus"
         threshold: null
     
-    # Bypass validation for direct Opus calls
-    "anthropic/claude-opus-4-6":
-      - model: "anthropic/claude-opus-4-6"
+    # Direct Opus: Pass-through, no validation
+    claude-opus:
+      - model: "claude-opus"
         threshold: null
 
 filters:
+  # Skip validation for these model requests
   validateModels:
     - "smart"
     - "tim"
-    - "ollama/*"
-    - "anthropic/claude-haiku-4-6"
   
+  # Skip if question is too short or matches keywords
   skipIf:
     questionLengthLessThan: 20
     containsKeywords:
@@ -71,13 +72,10 @@ metrics:
   enabled: true
   port: 9090
   path: "/metrics"
-  labels:
-    realm: "${REALM:-roundtable}"
-    deployment: "${DEPLOYMENT:-production}"
 
 logging:
   level: "info"
-  format: "pretty"  # Use 'json' in production
+  format: "json"
   validationLog:
     enabled: true
-    path: "/var/log/squire/validations.jsonl"
+    path: "/var/log/squire/validation.jsonl"

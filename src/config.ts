@@ -1,84 +1,72 @@
-import { z } from 'zod';
 import fs from 'fs';
-import yaml from 'js-yaml';
-import path from 'path';
+import yaml from 'yaml';
 
-const EscalationTierSchema = z.object({
-  model: z.string(),
-  threshold: z.number().min(0).max(100).nullable(),
-});
+export interface EscalationStep {
+  model: string;
+  threshold: number | null;  // null = terminal model, accept anything
+}
 
-const EscalationPathSchema = z.array(EscalationTierSchema);
+export interface SquireConfig {
+  server: {
+    port: number;
+    name: string;
+  };
+  backend: {
+    url: string;
+    apiKey?: string;
+  };
+  validation: {
+    enabled: boolean;
+    judgeModel: string;
+    threshold: number;
+    judgePrompt: string;
+  };
+  escalation: {
+    enabled: boolean;
+    maxAttempts: number;
+    paths: Record<string, EscalationStep[]>;
+  };
+  filters: {
+    validateModels: string[];
+    skipIf: {
+      questionLengthLessThan: number;
+      containsKeywords: string[];
+    };
+  };
+  metrics: {
+    enabled: boolean;
+    port: number;
+    path: string;
+  };
+  logging: {
+    level: string;
+    format: string;
+    validationLog: {
+      enabled: boolean;
+      path: string;
+    };
+  };
+}
 
-const ConfigSchema = z.object({
-  server: z.object({
-    port: z.number().default(4001),
-    name: z.string().default('squire'),
-    realm: z.string().default('roundtable'),
-  }),
-  
-  litellm: z.object({
-    endpoint: z.string().url(),
-    apiKey: z.string().optional(),
-  }),
-  
-  validation: z.object({
-    enabled: z.boolean().default(true),
-    judgeModel: z.string().default('anthropic/claude-haiku-4-6'),
-    threshold: z.number().min(0).max(100).default(70),
-    judgePrompt: z.string(),
-  }),
-  
-  escalation: z.object({
-    enabled: z.boolean().default(true),
-    maxAttempts: z.number().min(1).max(10).default(3),
-    paths: z.record(z.string(), EscalationPathSchema),
-  }),
-  
-  filters: z.object({
-    validateModels: z.array(z.string()).optional(),
-    skipIf: z.object({
-      questionLengthLessThan: z.number().optional(),
-      containsKeywords: z.array(z.string()).optional(),
-    }).optional(),
-  }).optional(),
-  
-  metrics: z.object({
-    enabled: z.boolean().default(true),
-    port: z.number().default(9090),
-    path: z.string().default('/metrics'),
-    labels: z.record(z.string(), z.string()).optional(),
-  }),
-  
-  logging: z.object({
-    level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
-    format: z.enum(['json', 'pretty']).default('json'),
-    validationLog: z.object({
-      enabled: z.boolean().default(true),
-      path: z.string().default('/var/log/squire/validations.jsonl'),
-    }).optional(),
-  }),
-});
-
-export type SquireConfig = z.infer<typeof ConfigSchema>;
-export type EscalationTier = z.infer<typeof EscalationTierSchema>;
-
-function replaceEnvVars(obj: any): any {
+function expandEnvVars(obj: any): any {
   if (typeof obj === 'string') {
     return obj.replace(/\$\{([^}]+)\}/g, (_, key) => {
-      const [envKey, defaultValue] = key.split(':-');
-      return process.env[envKey] || defaultValue || '';
+      const value = process.env[key];
+      if (value === undefined) {
+        throw new Error(`Environment variable ${key} not set`);
+      }
+      return value;
     });
   }
   
   if (Array.isArray(obj)) {
-    return obj.map(replaceEnvVars);
+    return obj.map(expandEnvVars);
   }
   
   if (obj !== null && typeof obj === 'object') {
     const result: any = {};
     for (const [key, value] of Object.entries(obj)) {
-      result[key] = replaceEnvVars(value);
+      result[key] = expandEnvVars(value);
     }
     return result;
   }
@@ -91,17 +79,16 @@ export function loadConfig(configPath?: string): SquireConfig {
     configPath,
     process.env.SQUIRE_CONFIG,
     '/etc/squire/squire.yaml',
-    path.join(process.cwd(), 'config', 'squire.yaml'),
-  ].filter(Boolean);
+    './config/squire.yaml',
+  ].filter(Boolean) as string[];
   
-  for (const p of paths) {
-    if (p && fs.existsSync(p)) {
-      const content = fs.readFileSync(p, 'utf-8');
-      const rawConfig = yaml.load(content);
-      const configWithEnv = replaceEnvVars(rawConfig);
-      return ConfigSchema.parse(configWithEnv);
+  for (const path of paths) {
+    if (fs.existsSync(path)) {
+      const content = fs.readFileSync(path, 'utf-8');
+      const parsed = yaml.parse(content);
+      return expandEnvVars(parsed) as SquireConfig;
     }
   }
   
-  throw new Error(`No config file found. Tried: ${paths.join(', ')}`);
+  throw new Error(`No config file found. Searched: ${paths.join(', ')}`);
 }

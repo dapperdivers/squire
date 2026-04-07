@@ -34,13 +34,17 @@ export interface ChatResponse {
   };
 }
 
+/**
+ * Simple HTTP call to LiteLLM backend.
+ * Squire doesn't know or care which provider is handling this.
+ */
 async function callLiteLLM(
-  endpoint: string,
+  backendUrl: string,
   apiKey: string | undefined,
   request: ChatRequest,
   logger: Logger
 ): Promise<ChatResponse> {
-  const url = `${endpoint}/v1/chat/completions`;
+  const url = `${backendUrl}/v1/chat/completions`;
   
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -50,7 +54,7 @@ async function callLiteLLM(
     headers['Authorization'] = `Bearer ${apiKey}`;
   }
   
-  logger.debug({ url, model: request.model }, 'Calling LiteLLM');
+  logger.debug({ url, model: request.model }, 'Calling LiteLLM backend');
   
   const response = await fetch(url, {
     method: 'POST',
@@ -67,6 +71,9 @@ async function callLiteLLM(
   return response.json() as Promise<ChatResponse>;
 }
 
+/**
+ * Validate a response using the judge model.
+ */
 export async function validateResponse(
   question: string,
   response: string,
@@ -87,11 +94,11 @@ export async function validateResponse(
     max_tokens: 500,
   };
   
-  logger.debug({ judgeModel: config.validation.judgeModel }, 'Validating response');
+  logger.debug({ judgeModel: config.validation.judgeModel }, 'Validating response with judge');
   
   const judgeResponse: ChatResponse = await callLiteLLM(
-    config.litellm.endpoint,
-    config.litellm.apiKey,
+    config.backend.url,
+    config.backend.apiKey,
     judgeRequest,
     logger
   );
@@ -107,11 +114,11 @@ export async function validateResponse(
     const jsonStr = jsonMatch ? jsonMatch[1] : judgeOutput;
     parsed = JSON.parse(jsonStr);
   } catch (e) {
-    logger.warn({ judgeOutput }, 'Failed to parse judge output as JSON, using fallback');
+    logger.warn({ judgeOutput }, 'Failed to parse judge output, using fallback');
     parsed = { score: 0, reasoning: 'Judge output was not valid JSON' };
   }
   
-  // Estimate cost (Haiku: ~$1/$5 per million tokens)
+  // Estimate cost (rough approximation - LiteLLM tracks exact costs)
   const promptTokens = judgeResponse.usage?.prompt_tokens || 0;
   const completionTokens = judgeResponse.usage?.completion_tokens || 0;
   const cost = (promptTokens * 0.000001) + (completionTokens * 0.000005);
@@ -122,7 +129,7 @@ export async function validateResponse(
     score: parsed.score,
     reasoning: parsed.reasoning,
     cost,
-  }, '⚖️  [Squire] Response validated');
+  }, '⚖️  Response validated');
   
   return {
     score: parsed.score,
@@ -131,6 +138,42 @@ export async function validateResponse(
   };
 }
 
+/**
+ * Check if we should skip validation for this request.
+ */
+function shouldSkipValidation(request: ChatRequest, config: SquireConfig): boolean {
+  // Not in validateModels list
+  if (!config.filters.validateModels.includes(request.model)) {
+    return true;
+  }
+  
+  // Get the user's last message
+  const lastMessage = request.messages[request.messages.length - 1];
+  if (!lastMessage || lastMessage.role !== 'user') {
+    return true;
+  }
+  
+  const question = lastMessage.content.toLowerCase();
+  
+  // Too short
+  if (question.length < config.filters.skipIf.questionLengthLessThan) {
+    return true;
+  }
+  
+  // Contains skip keyword
+  for (const keyword of config.filters.skipIf.containsKeywords) {
+    if (question.includes(keyword.toLowerCase())) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Execute request with quality-gated escalation.
+ * This is the core Squire logic - everything else is delegated to LiteLLM.
+ */
 export async function executeWithEscalation(
   request: ChatRequest,
   config: SquireConfig,
@@ -138,106 +181,122 @@ export async function executeWithEscalation(
   metrics: Metrics
 ): Promise<{ response: ChatResponse; attempts: number; finalScore: number | null }> {
   const originalModel = request.model;
+  
+  // Check skip filters
+  if (shouldSkipValidation(request, config)) {
+    logger.info({ model: originalModel }, 'Skipping validation (filter matched), passing through');
+    const response = await callLiteLLM(config.backend.url, config.backend.apiKey, request, logger);
+    metrics.requestsTotal.inc({ model: originalModel, result: 'passthrough' });
+    return { response, attempts: 1, finalScore: null };
+  }
+  
+  // Get escalation path
   const escalationPath = config.escalation.paths[originalModel];
   
   if (!escalationPath) {
-    logger.warn({ model: originalModel }, 'No escalation path found, executing without validation');
-    const response = await callLiteLLM(config.litellm.endpoint, config.litellm.apiKey, request, logger);
+    logger.info({ model: originalModel }, 'No escalation path, passing through');
+    const response = await callLiteLLM(config.backend.url, config.backend.apiKey, request, logger);
     metrics.requestsTotal.inc({ model: originalModel, result: 'no_escalation' });
     return { response, attempts: 1, finalScore: null };
   }
   
+  // Walk escalation path
   let attempts = 0;
   let lastResponse: ChatResponse | null = null;
   let lastScore: number | null = null;
-  let currentTierIndex = 0;
   
   const question = request.messages[request.messages.length - 1]?.content || '';
   
-  while (attempts < config.escalation.maxAttempts && currentTierIndex < escalationPath.length) {
-    const tier = escalationPath[currentTierIndex];
+  for (let i = 0; i < escalationPath.length && attempts < config.escalation.maxAttempts; i++) {
+    const step = escalationPath[i];
     attempts++;
     
-    const tierRequest = { ...request, model: tier.model };
+    const tierRequest = { ...request, model: step.model };
     
-    logger.info({ attempt: attempts, model: tier.model, threshold: tier.threshold }, 
-                 `⚔️  [Squire] Attempting with ${tier.model}`);
+    logger.info({ 
+      attempt: attempts, 
+      model: step.model, 
+      threshold: step.threshold 
+    }, `⚔️  Attempting with ${step.model}`);
     
     const startTime = Date.now();
     
     try {
       const response = await callLiteLLM(
-        config.litellm.endpoint,
-        config.litellm.apiKey,
+        config.backend.url,
+        config.backend.apiKey,
         tierRequest,
         logger
       );
       
       const duration = (Date.now() - startTime) / 1000;
-      metrics.requestDuration.observe({ model: tier.model, result: 'success' }, duration);
+      metrics.requestDuration.observe({ model: step.model, result: 'success' }, duration);
       
       lastResponse = response;
       const responseText = response.choices[0]?.message?.content || '';
       
-      // If this is the last tier or threshold is null, accept without validation
-      if (tier.threshold === null || currentTierIndex === escalationPath.length - 1) {
-        logger.info({ model: tier.model }, 
-                     '🛡️  [Squire] Using highest tier or last resort - accepting without validation');
-        metrics.requestsTotal.inc({ model: tier.model, result: 'accepted' });
+      // Terminal model or validation disabled?
+      if (step.threshold === null || !config.validation.enabled) {
+        logger.info({ model: step.model }, 
+                     '🛡️  Terminal model or validation disabled - accepting');
+        metrics.requestsTotal.inc({ model: step.model, result: 'accepted' });
         return { response, attempts, finalScore: lastScore };
       }
       
       // Validate
-      if (config.validation.enabled) {
-        const validation = await validateResponse(question, responseText, config, logger, metrics);
-        lastScore = validation.score;
+      const validation = await validateResponse(question, responseText, config, logger, metrics);
+      lastScore = validation.score;
+      
+      metrics.validationScore.observe({ model: step.model }, validation.score);
+      
+      if (validation.score >= step.threshold) {
+        const modelNickname = step.model.split('/').pop() || step.model;
+        logger.info({ 
+          model: step.model, 
+          score: validation.score, 
+          threshold: step.threshold 
+        }, `🛡️  Sir ${modelNickname}'s answer meets the standard (${validation.score}/${step.threshold})`);
         
-        metrics.validationScore.observe({ model: tier.model }, validation.score);
-        
-        if (validation.score >= tier.threshold) {
-          logger.info({ 
-            model: tier.model, 
-            score: validation.score, 
-            threshold: tier.threshold 
-          }, `🛡️  [Squire] Sir ${tier.model.split('/').pop()}'s answer meets the standard. The king shall hear it.`);
-          
-          metrics.requestsTotal.inc({ model: tier.model, result: 'accepted' });
-          return { response, attempts, finalScore: validation.score };
-        }
-        
-        logger.warn({
-          model: tier.model,
-          score: validation.score,
-          threshold: tier.threshold,
-          reasoning: validation.reasoning,
-        }, `⚔️  [Squire] Answer falls short (score: ${validation.score}/${tier.threshold}). Demanding a worthier response.`);
-        
-        // Escalate
-        if (currentTierIndex < escalationPath.length - 1) {
-          const nextTier = escalationPath[currentTierIndex + 1];
-          metrics.escalationsTotal.inc({ from: tier.model, to: nextTier.model });
-          logger.info({ from: tier.model, to: nextTier.model }, 
-                       '🔥 [Squire] Escalating to stronger ally');
-        }
+        metrics.requestsTotal.inc({ model: step.model, result: 'accepted' });
+        return { response, attempts, finalScore: validation.score };
       }
       
-      currentTierIndex++;
+      logger.warn({
+        model: step.model,
+        score: validation.score,
+        threshold: step.threshold,
+        reasoning: validation.reasoning,
+      }, `⚔️  Answer falls short (${validation.score}/${step.threshold})`);
+      
+      // Escalate to next tier
+      if (i < escalationPath.length - 1) {
+        const nextStep = escalationPath[i + 1];
+        metrics.escalationsTotal.inc({ from: step.model, to: nextStep.model });
+        logger.info({ from: step.model, to: nextStep.model }, 
+                     '🔥 Escalating to stronger model');
+      }
       
     } catch (error) {
       const duration = (Date.now() - startTime) / 1000;
-      metrics.requestDuration.observe({ model: tier.model, result: 'error' }, duration);
+      metrics.requestDuration.observe({ model: step.model, result: 'error' }, duration);
       
-      logger.error({ error, model: tier.model, attempt: attempts }, 
-                    'Request failed, escalating');
+      logger.error({ error, model: step.model, attempt: attempts }, 
+                    'Request failed');
       
-      currentTierIndex++;
+      // If not last tier, try next
+      if (i < escalationPath.length - 1) {
+        logger.info('Escalating due to error');
+        continue;
+      }
+      
+      throw error;
     }
   }
   
-  // If we exhausted all tiers, return the last response
+  // Exhausted all tiers
   if (lastResponse) {
     logger.warn({ attempts, finalScore: lastScore }, 
-                 '⚠️  [Squire] All attempts exhausted. Presenting the best attempt.');
+                 '⚠️  All tiers exhausted. Returning best attempt.');
     metrics.requestsTotal.inc({ model: originalModel, result: 'exhausted' });
     return { response: lastResponse, attempts, finalScore: lastScore };
   }

@@ -1,0 +1,153 @@
+---
+# LiteLLM Configuration for Squire Integration
+# Model registry, provider abstraction, cost tracking, rate limiting
+# Squire calls this as its sole backend
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: ai
+data:
+  config.yaml: |
+    # LiteLLM Model Registry
+    # Squire uses these aliases, LiteLLM handles provider details
+    
+    model_list:
+      # ── Local Models (Free) ────────────────────────────────────
+      - model_name: gemma-local
+        litellm_params:
+          model: ollama/gemma4:26b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 600
+          extra_body:
+            think: false
+        model_info:
+          description: "Local Gemma 4 26B A4B MoE — 3x P100 GPUs"
+      
+      - model_name: gemma-fast
+        litellm_params:
+          model: ollama/gemma4:e4b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 120
+          extra_body:
+            think: false
+        model_info:
+          description: "Local Gemma 4 E4B — lightweight fallback"
+      
+      # ── Anthropic Cloud (Paid) ─────────────────────────────────
+      - model_name: claude-haiku
+        litellm_params:
+          model: anthropic/claude-haiku-4-6
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 300
+        model_info:
+          mode: chat
+          supports_function_calling: true
+          cost_per_million_tokens: "$1/$5"
+      
+      - model_name: claude-sonnet
+        litellm_params:
+          model: anthropic/claude-sonnet-4-5
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 600
+        model_info:
+          mode: chat
+          supports_vision: true
+          supports_function_calling: true
+          cost_per_million_tokens: "$3/$15"
+      
+      - model_name: claude-opus
+        litellm_params:
+          model: anthropic/claude-opus-4-6
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 600
+        model_info:
+          mode: chat
+          supports_vision: true
+          supports_function_calling: true
+          cost_per_million_tokens: "$15/$75"
+      
+      # ── Legacy Aliases (for compatibility) ─────────────────────
+      # Map common SDK model names to local Gemma
+      - model_name: gpt-3.5-turbo
+        litellm_params:
+          model: ollama/gemma4:26b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 300
+      
+      - model_name: gpt-4
+        litellm_params:
+          model: ollama/gemma4:26b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 300
+      
+      - model_name: claude-3-5-sonnet-20241022
+        litellm_params:
+          model: ollama/gemma4:26b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 300
+      
+      - model_name: claude-sonnet-4-20250514
+        litellm_params:
+          model: ollama/gemma4:26b
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 300
+      
+      # ── Full Anthropic Names (direct routing) ──────────────────
+      - model_name: anthropic/claude-sonnet-4-5
+        litellm_params:
+          model: anthropic/claude-sonnet-4-5
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 600
+      
+      - model_name: anthropic/claude-opus-4-6
+        litellm_params:
+          model: anthropic/claude-opus-4-6
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 600
+      
+      - model_name: anthropic/claude-haiku-4-6
+        litellm_params:
+          model: anthropic/claude-haiku-4-6
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 300
+      
+      # ── Short Anthropic Aliases ────────────────────────────────
+      - model_name: sonnet
+        litellm_params:
+          model: anthropic/claude-sonnet-4-5
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 600
+      
+      - model_name: opus
+        litellm_params:
+          model: anthropic/claude-opus-4-6
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 600
+      
+      - model_name: haiku
+        litellm_params:
+          model: anthropic/claude-haiku-4-6
+          api_key: os.environ/ANTHROPIC_API_KEY
+          timeout: 300
+    
+    router_settings:
+      routing_strategy: simple-shuffle
+      num_retries: 2
+      timeout: 300
+      retry_after: 5
+    
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+    
+    litellm_settings:
+      set_verbose: false
+      json_logs: true
+      request_timeout: 600
+      drop_params: true
+      cache: true
+      cache_params:
+        type: redis
+        host: dragonfly.database.svc.cluster.local
+        port: 6379
