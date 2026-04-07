@@ -1,225 +1,270 @@
-# 🛡️ Squire - The Quality Sentinel
+# Squire 🛡️
 
-**Validate LLM responses and automatically escalate to better models when quality falls short.**
+**Quality-gated LLM escalation for the Round Table.**
 
-A transparent proxy for [LiteLLM](https://github.com/BerriAI/litellm) that uses LLM-as-a-judge to ensure every response meets your quality threshold, with automatic model escalation and cost optimization.
-
-Built for the [Round Table](https://github.com/dapperdivers/roundtable) AI knight fleet, works with any OpenAI-compatible client.
+Squire validates LLM responses and automatically escalates to stronger models when quality falls short. It's the **simplest possible** middleware between your agents and LiteLLM — just quality gating, escalation logic, and metrics.
 
 ---
 
-## ✨ Features
+## Philosophy
 
-- 🎯 **Quality-aware routing** with configurable thresholds
-- ⚡ **Automatic model escalation** (cheap → expensive)
-- 💰 **40-60% cost savings** vs always-using premium models
-- 🔍 **LLM-as-a-judge validation** using fast, cheap models
-- 📊 **Prometheus metrics** and cost tracking
-- 🛡️ **Drop-in replacement** for any LiteLLM client
-- 🏰 **Round Table themed** with lore-accurate logging
+**Let LiteLLM do LiteLLM things. Squire only does what LiteLLM can't.**
+
+- ✅ **Judge loop** — Validate response quality with a configurable judge model
+- ✅ **Escalation engine** — Walk up a model tier when responses fall short
+- ✅ **Skip filters** — Bypass validation for trivial requests
+- ✅ **Prometheus metrics** — Escalation rates, validation scores, costs
+- ✅ **Validation log** — JSONL log of every decision
+
+Everything else (provider abstraction, key management, rate limiting, cost tracking) is **delegated to LiteLLM**.
+
+**Result:** 600 lines of TypeScript instead of 1000+.
 
 ---
 
-## 🚀 Quick Start
+##Architecture
+
+```
+Knights/Agents → Squire:4001 → LiteLLM:4000 → Providers
+                   (quality)     (routing)
+```
+
+**Flow:**
+1. Knight requests `model: "smart"`
+2. Squire tries `gemma-local` → validates response
+3. If score < 70, escalates to `claude-haiku`
+4. If still < 70, escalates to `claude-sonnet` (terminal, accept anything)
+5. Returns validated response
+
+---
+
+## Quick Start
+
+### 1. Configure LiteLLM
+
+Add model aliases to LiteLLM config:
+
+```yaml
+model_list:
+  - model_name: gemma-local
+    litellm_params:
+      model: ollama/gemma4:26b
+      api_base: http://ollama:11434
+  
+  - model_name: claude-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+  
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+### 2. Deploy Squire
+
+```bash
+kubectl apply -f kubernetes/deployment.yaml
+```
+
+### 3. Point Knights at Squire
+
+```yaml
+env:
+  - name: OPENAI_BASE_URL
+    value: "http://squire.ai.svc.cluster.local:4001/v1"
+  - name: OPENAI_API_KEY
+    value: "not-needed"  # Squire authenticates to LiteLLM
+```
+
+### 4. Send Requests
+
+```bash
+curl -X POST http://squire:4001/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "smart",
+    "messages": [{"role": "user", "content": "Explain quantum computing"}]
+  }'
+```
+
+**Expected logs:**
+```
+⚔️  Attempting with gemma-local
+⚖️  Response validated (score: 65/100)
+🔥 Escalating to claude-haiku
+⚖️  Response validated (score: 85/100)
+🛡️  Sir Haiku's answer meets the standard
+```
+
+---
+
+## Configuration
+
+### Escalation Paths
+
+Define model tiers in `squire.yaml`:
+
+```yaml
+escalation:
+  paths:
+    smart:
+      - model: "gemma-local"
+        threshold: 70
+      - model: "claude-haiku"
+        threshold: 70
+      - model: "claude-sonnet"
+        threshold: null  # Terminal, accept anything
+```
+
+**Models are LiteLLM aliases**, not provider-specific identifiers. Squire doesn't know or care if `gemma-local` is Ollama, vLLM, or a magic 8-ball.
+
+### Skip Filters
+
+Bypass validation for trivial requests:
+
+```yaml
+filters:
+  validateModels:
+    - "smart"
+    - "tim"
+  
+  skipIf:
+    questionLengthLessThan: 20
+    containsKeywords:
+      - "hello"
+      - "hi"
+      - "thanks"
+```
+
+Requests to other models (e.g., `claude-opus`) pass through without validation.
+
+### Judge Prompt
+
+Customize how responses are validated:
+
+```yaml
+validation:
+  judgeModel: "claude-haiku"
+  threshold: 70
+  judgePrompt: |
+    Rate this response 0-100:
+    
+    **Accuracy (0-40):** Factually correct?
+    **Completeness (0-30):** Fully answers the question?
+    **Clarity (0-30):** Clear and well-structured?
+    
+    Question: {question}
+    Response: {response}
+    
+    Output ONLY JSON: {"score": <number>, "reasoning": "<text>"}
+```
+
+---
+
+## Metrics
+
+Squire exports Prometheus metrics on `:9090/metrics`:
+
+```promql
+# Total requests by model and result
+squire_requests_total{model="smart", result="accepted"}
+
+# Escalation rate
+rate(squire_escalations_total{from="gemma-local", to="claude-haiku"}[5m])
+
+# Average validation score
+avg(squire_validation_score{model="gemma-local"})
+
+# P95 response time
+histogram_quantile(0.95, squire_request_duration_seconds_bucket)
+
+# Total validation cost (judge model calls)
+squire_validation_cost_total
+```
+
+---
+
+## Validation Log
+
+Every validation decision is logged to `/var/log/squire/validation.jsonl`:
+
+```json
+{"timestamp":"2026-04-07T01:00:00Z","model":"smart","attempts":2,"finalScore":85,"question":"Explain quantum computing","response":"Quantum computing uses..."}
+```
+
+Use this to tune thresholds, debug escalation behavior, or train better judge prompts.
+
+---
+
+## Development
+
+### Local
+
+```bash
+npm install
+npm run dev
+```
+
+### Build
+
+```bash
+npm run build
+npm start
+```
 
 ### Docker
 
 ```bash
+docker build -t squire:local .
 docker run -p 4001:4001 -p 9090:9090 \
-  -e LITELLM_ENDPOINT=http://litellm:4000 \
   -e LITELLM_API_KEY=your-key \
-  ghcr.io/dapperdivers/squire:latest
-```
-
-### Node.js
-
-```bash
-git clone https://github.com/dapperdivers/squire.git
-cd squire
-npm install
-npm run dev
-```
-
-### Kubernetes
-
-```bash
-kubectl apply -f https://raw.githubusercontent.com/dapperdivers/squire/main/kubernetes/deployment.yaml
+  squire:local
 ```
 
 ---
 
-## 📖 How It Works
+## Comparison
 
-**1. Client sends request to Squire**
-```typescript
-fetch("http://squire:4001/v1/chat/completions", {
-  method: "POST",
-  body: JSON.stringify({
-    model: "smart",  // Uses escalation path
-    messages: [{ role: "user", content: "Explain quantum computing" }]
-  })
-});
-```
-
-**2. Squire tries cheapest model first**
-- Calls `ollama/gemma4:26b` (free, local)
-- Returns: "Quantum computing uses qubits..."
-
-**3. Squire validates with judge**
-- Calls `claude-haiku-4-6` to score response 0-100
-- Judge returns: `{"score": 65, "reasoning": "Accurate but incomplete"}`
-
-**4. Below threshold? Escalate!**
-- Score 65 < threshold 70
-- Squire retries with `claude-haiku-4-6`
-
-**5. Judge validates again**
-- New score: 88 ✓
-- Squire returns response to client
-
-**Cost:** $0.0001 (Gemma) + $0.0002 (2x judge) + $0.001 (Haiku) = **$0.0013**  
-**Without Squire:** $0.015 (Sonnet every time) = **91% savings**
+| Before (Complex Squire) | After (Slim Squire) |
+|-------------------------|---------------------|
+| Manages provider API keys | LiteLLM handles keys |
+| Provider-specific code | Generic HTTP to LiteLLM |
+| Two LiteLLM instances | One LiteLLM instance |
+| Split cost tracking | Unified in LiteLLM |
+| 1000+ lines of TS | 600 lines of TS |
+| New provider = code change | New provider = config change |
 
 ---
 
-## ⚙️ Configuration
+## Future: LiteLLM Guardrail
 
-Create `config/squire.yaml`:
+LiteLLM has an open feature request ([#7320](https://github.com/BerriAI/litellm/issues/7320)) for **retry-on-guardrail-failure**.
 
-```yaml
-server:
-  port: 4001
-  realm: "roundtable"
+If/when they ship it, Squire can collapse into a LiteLLM custom guardrail:
 
-litellm:
-  endpoint: "http://litellm:4000"
-  apiKey: "${LITELLM_API_KEY}"
-
-validation:
-  enabled: true
-  judgeModel: "anthropic/claude-haiku-4-6"
-  threshold: 70
-
-escalation:
-  enabled: true
-  maxAttempts: 3
-  paths:
-    smart:
-      - model: "ollama/gemma4:26b"
-        threshold: 70
-      - model: "anthropic/claude-haiku-4-6"
-        threshold: 70
-      - model: "anthropic/claude-sonnet-4-5"
-        threshold: null  # Accept any score
+```python
+# Future: Squire as LiteLLM guardrail
+class QualityJudgeGuardrail(CustomGuardrail):
+    async def async_post_call_success_hook(self, data, response):
+        score = await self.judge(data, response)
+        if score < self.threshold:
+            raise RetryWithEscalation(next_model=...)
 ```
 
-**See [config/squire.yaml](./config/squire.yaml) for full example.**
+Monitor that issue. When it lands, Squire disappears and quality gating lives inside LiteLLM.
 
 ---
 
-## 📊 Metrics
-
-Squire exposes Prometheus metrics on `:9090/metrics`:
-
-```
-squire_requests_total{model="smart",result="accepted"} 142
-squire_escalations_total{from="haiku",to="sonnet"} 23
-squire_validation_score{model="smart"} 85
-squire_validation_cost_total 0.042
-squire_request_cost_total{model="smart"} 12.50
-```
-
-**Grafana dashboard:** Coming soon!
-
----
-
-## 🏰 Round Table Integration
-
-### Knights
-
-Point knights at Squire instead of LiteLLM:
-
-```yaml
-# kubernetes/apps/roundtable/knights/galahad.yaml
-spec:
-  env:
-    - name: OPENAI_BASE_URL
-      value: "http://squire.ai.svc.cluster.local:4001/v1"
-```
-
-### OpenClaw (molt/munin)
-
-```bash
-openclaw config set agents.defaults.providers.anthropic.baseUrl \
-  "http://squire.ai.svc.cluster.local:4001/v1"
-```
-
----
-
-## 🎭 Lore-Accurate Logging
-
-Squire speaks in-character:
-
-```
-⚔️  [Squire] Attempting with ollama/gemma4:26b
-⚖️  [Squire] Response validated (score: 65/100)
-⚔️  [Squire] Answer falls short. Demanding a worthier response.
-🔥  [Squire] Escalating to stronger ally (claude-haiku-4-6)
-🛡️  [Squire] Sir Haiku's answer meets the standard. The king shall hear it.
-```
-
----
-
-## 🧪 Development
-
-```bash
-# Install
-npm install
-
-# Run locally
-npm run dev
-
-# Build
-npm run build
-
-# Run tests
-npm test
-
-# Format
-npm run format
-```
-
----
-
-## 📈 Roadmap
-
-- [x] Basic proxy + validation
-- [x] Model escalation
-- [x] Prometheus metrics
-- [ ] Validation log (JSONL)
-- [ ] Selective validation (skip simple queries)
-- [ ] Grafana dashboard
-- [ ] Custom judge prompts per model
-- [ ] Docker image + Kubernetes manifests
-- [ ] Public release
-
----
-
-## 📄 License
+## License
 
 MIT
 
 ---
 
-## 🙏 Credits
+## Credits
 
-Built by [Derek Mackley](https://github.com/dapperdivers) for the Round Table.
+Built for the Round Table by **Tim the Enchanter** 🔥
 
-Inspired by:
-- [LiteLLM](https://github.com/BerriAI/litellm) - LLM proxy
-- [Guardrails.ai](https://guardrailsai.com) - Output validation
-- [simple-llm-eval](https://github.com/cyberark/simple-llm-eval) - LLM-as-a-judge
-
----
-
-**⚔️ May your responses be worthy, your costs be low, and your thresholds be met. ⚔️**
+*"Some call me... Tim."*

@@ -34,11 +34,10 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/config ./config
 
 # Create non-root user
-RUN addgroup -g 1000 squire && \
-    adduser -D -u 1000 -G squire squire && \
-    chown -R squire:squire /app && \
-    mkdir -p /var/log/squire && \
-    chown -R squire:squire /var/log/squire
+RUN mkdir -p /var/log/squire && \
+    addgroup -S -g 1000 squire 2>/dev/null || true && \
+    adduser -S -u 1000 -G squire squire 2>/dev/null || true && \
+    chown -R 1000:1000 /app /var/log/squire
 
 USER squire
 
