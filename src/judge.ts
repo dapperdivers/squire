@@ -13,6 +13,19 @@ export interface ChatMessage {
   content: string | Array<{type: string; text?: string; [key: string]: any}>;
 }
 
+/**
+ * Normalize content to a string (handles both string and multimodal array formats)
+ */
+function normalizeContent(content: string | Array<{type: string; text?: string; [key: string]: any}>): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map((part: any) => part.text || '').join(' ');
+  }
+  return '';
+}
+
 export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
@@ -153,14 +166,7 @@ function shouldSkipValidation(request: ChatRequest, config: SquireConfig): boole
     return true;
   }
   
-  // Handle both string and array content (OpenAI API supports both)
-  const contentText = typeof lastMessage.content === 'string' 
-    ? lastMessage.content 
-    : Array.isArray(lastMessage.content)
-      ? lastMessage.content.map((part: any) => part.text || '').join(' ')
-      : '';
-  
-  const question = contentText.toLowerCase();
+  const question = normalizeContent(lastMessage.content).toLowerCase();
   
   // Too short
   if (question.length < config.filters.skipIf.questionLengthLessThan) {
@@ -212,7 +218,8 @@ export async function executeWithEscalation(
   let lastResponse: ChatResponse | null = null;
   let lastScore: number | null = null;
   
-  const question = request.messages[request.messages.length - 1]?.content || '';
+  const lastMessage = request.messages[request.messages.length - 1];
+  const question = lastMessage ? normalizeContent(lastMessage.content) : '';
   
   for (let i = 0; i < escalationPath.length && attempts < config.escalation.maxAttempts; i++) {
     const step = escalationPath[i];
