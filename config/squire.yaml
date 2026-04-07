@@ -1,0 +1,83 @@
+# Squire - Quality Sentinel Configuration
+server:
+  port: 4001
+  name: "squire"
+  realm: "roundtable"
+
+litellm:
+  endpoint: "${LITELLM_ENDPOINT:-http://litellm.ai.svc.cluster.local:4000}"
+  apiKey: "${LITELLM_API_KEY}"
+
+validation:
+  enabled: true
+  judgeModel: "anthropic/claude-haiku-4-6"
+  threshold: 70
+  judgePrompt: |
+    You are a quality validator for the Round Table. Rate this response 0-100:
+    
+    **Accuracy (0-40):** Is the response factually correct?
+    **Completeness (0-30):** Does it fully answer the question?
+    **Clarity (0-30):** Is it clear and well-structured?
+    
+    Question: {question}
+    Response: {response}
+    
+    Output ONLY valid JSON (no markdown): {"score": <number>, "reasoning": "<text>"}
+
+escalation:
+  enabled: true
+  maxAttempts: 3
+  paths:
+    # Knights use 'smart' router
+    smart:
+      - model: "ollama/gemma4:26b"
+        threshold: 70
+      - model: "anthropic/claude-haiku-4-6"
+        threshold: 70
+      - model: "anthropic/claude-sonnet-4-5"
+        threshold: null
+    
+    # OpenClaw uses 'tim' router
+    tim:
+      - model: "anthropic/claude-haiku-4-6"
+        threshold: 70
+      - model: "anthropic/claude-sonnet-4-5"
+        threshold: 70
+      - model: "anthropic/claude-opus-4-6"
+        threshold: null
+    
+    # Bypass validation for direct Opus calls
+    "anthropic/claude-opus-4-6":
+      - model: "anthropic/claude-opus-4-6"
+        threshold: null
+
+filters:
+  validateModels:
+    - "smart"
+    - "tim"
+    - "ollama/*"
+    - "anthropic/claude-haiku-4-6"
+  
+  skipIf:
+    questionLengthLessThan: 20
+    containsKeywords:
+      - "hello"
+      - "hi"
+      - "thanks"
+      - "thank you"
+      - "bye"
+
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics"
+  labels:
+    realm: "${REALM:-roundtable}"
+    deployment: "${DEPLOYMENT:-production}"
+
+logging:
+  level: "info"
+  format: "pretty"  # Use 'json' in production
+  validationLog:
+    enabled: true
+    path: "/var/log/squire/validations.jsonl"
