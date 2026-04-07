@@ -2,7 +2,7 @@ import express from 'express';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { createMetrics } from './metrics.js';
-import { executeWithRouting } from './router.js';
+import { executeWithRouting, shouldSkipRouting } from './router.js';
 import type { ChatRequest } from './judge.js';
 import fs from 'fs/promises';
 import { existsSync, mkdirSync } from 'fs';
@@ -29,7 +29,12 @@ app.post('/v1/chat/completions', async (req, res) => {
   }, 'Incoming chat request');
   
   try {
-    const result = await executeWithRouting(request, config, logger);
+    // Check skip filters first to avoid unnecessary Haiku classification cost
+    const skipRouting = shouldSkipRouting(request, config);
+    
+    const result = skipRouting 
+      ? await executeWithRouting(request, config, logger, metrics, true) // skip classifier
+      : await executeWithRouting(request, config, logger, metrics, false);
     
     // Log routing decision (async, don't block response)
     if (config.logging.validationLog.enabled) {

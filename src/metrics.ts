@@ -43,6 +43,32 @@ export function createMetrics(serviceName: string) {
     registers: [register],
   });
   
+  const routingClassifications = new Counter({
+    name: 'squire_routing_classifications_total',
+    help: 'Total routing classifications by complexity',
+    labelNames: ['complexity'],
+    registers: [register],
+  });
+  
+  const routingDuration = new Histogram({
+    name: 'squire_routing_duration_seconds',
+    help: 'Haiku classification duration in seconds',
+    buckets: [0.1, 0.5, 1, 2, 5],
+    registers: [register],
+  });
+  
+  const routingErrors = new Counter({
+    name: 'squire_routing_errors_total',
+    help: 'Total routing/classification errors',
+    registers: [register],
+  });
+  
+  const routingSkipped = new Counter({
+    name: 'squire_routing_skipped_total',
+    help: 'Total requests that skipped classification (via filters)',
+    registers: [register],
+  });
+  
   return {
     register,
     requestsTotal,
@@ -50,6 +76,10 @@ export function createMetrics(serviceName: string) {
     escalationsTotal,
     validationCostTotal,
     requestDuration,
+    routingClassifications,
+    routingDuration,
+    routingErrors,
+    routingSkipped,
   };
 }
 

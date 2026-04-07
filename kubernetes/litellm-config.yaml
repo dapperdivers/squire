@@ -35,6 +35,14 @@ data:
         model_info:
           description: "Local Gemma 4 E4B — lightweight fallback"
       
+      - model_name: nemotron
+        litellm_params:
+          model: ollama/nemotron-mini
+          api_base: http://ollama.ai.svc.cluster.local:11434
+          timeout: 300
+        model_info:
+          description: "NVIDIA Nemotron-Mini 4B — mid-tier reasoning"
+      
       # ── Anthropic Cloud (Paid) ─────────────────────────────────
       - model_name: claude-haiku
         litellm_params:

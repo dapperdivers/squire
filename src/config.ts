@@ -26,6 +26,14 @@ export interface SquireConfig {
     maxAttempts: number;
     paths: Record<string, EscalationStep[]>;
   };
+  routing?: {
+    models?: {
+      simple: string;
+      moderate: string;
+      complex: string;
+    };
+    classifierPrompt?: string;
+  };
   filters: {
     validateModels: string[];
     skipIf: {

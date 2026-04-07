@@ -73,6 +73,31 @@ metrics:
   port: 9090
   path: "/metrics"
 
+routing:
+  # Intelligent routing models
+  models:
+    simple: "gemma-local"      # Greetings, facts
+    moderate: "nemotron"        # Explanations, reasoning
+    complex: "claude-sonnet"    # Analysis, coding
+  
+  # Haiku classifier prompt (templated)
+  classifierPrompt: |
+    You are a task complexity classifier. Analyze this user request and determine its complexity level.
+    
+    User request: "{question}"
+    
+    Classify as:
+    - simple: Basic factual questions, greetings, simple definitions (use {simpleModel})
+    - moderate: Explanations, comparisons, multi-step reasoning (use {moderateModel})  
+    - complex: Deep analysis, creative work, coding, nuanced judgment (use {complexModel})
+    
+    Respond ONLY with valid JSON:
+    {
+      "complexity": "simple|moderate|complex",
+      "reasoning": "brief explanation",
+      "recommendedModel": "{simpleModel}|{moderateModel}|{complexModel}"
+    }
+
 logging:
   level: "info"
   format: "json"
