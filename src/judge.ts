@@ -10,7 +10,7 @@ export interface ValidationResult {
 
 export interface ChatMessage {
   role: string;
-  content: string;
+  content: string | Array<{type: string; text?: string; [key: string]: any}>;
 }
 
 export interface ChatRequest {
@@ -157,7 +157,7 @@ function shouldSkipValidation(request: ChatRequest, config: SquireConfig): boole
   const contentText = typeof lastMessage.content === 'string' 
     ? lastMessage.content 
     : Array.isArray(lastMessage.content)
-      ? lastMessage.content.map(part => typeof part === 'object' && 'text' in part ? part.text : '').join(' ')
+      ? lastMessage.content.map((part: any) => part.text || '').join(' ')
       : '';
   
   const question = contentText.toLowerCase();
