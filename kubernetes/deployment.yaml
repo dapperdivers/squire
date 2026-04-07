@@ -1,0 +1,193 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: squire-config
+  namespace: ai
+data:
+  squire.yaml: |
+    server:
+      port: 4001
+      name: "squire"
+      realm: "roundtable"
+    
+    litellm:
+      endpoint: "http://litellm.ai.svc.cluster.local:4000"
+      apiKey: "${LITELLM_API_KEY}"
+    
+    validation:
+      enabled: true
+      judgeModel: "anthropic/claude-haiku-4-6"
+      threshold: 70
+      judgePrompt: |
+        You are a quality validator for the Round Table. Rate this response 0-100:
+        
+        **Accuracy (0-40):** Is the response factually correct?
+        **Completeness (0-30):** Does it fully answer the question?
+        **Clarity (0-30):** Is it clear and well-structured?
+        
+        Question: {question}
+        Response: {response}
+        
+        Output ONLY valid JSON (no markdown): {"score": <number>, "reasoning": "<text>"}
+    
+    escalation:
+      enabled: true
+      maxAttempts: 3
+      paths:
+        smart:
+          - model: "ollama/gemma4:26b"
+            threshold: 70
+          - model: "anthropic/claude-haiku-4-6"
+            threshold: 70
+          - model: "anthropic/claude-sonnet-4-5"
+            threshold: null
+        
+        tim:
+          - model: "anthropic/claude-haiku-4-6"
+            threshold: 70
+          - model: "anthropic/claude-sonnet-4-5"
+            threshold: 70
+          - model: "anthropic/claude-opus-4-6"
+            threshold: null
+        
+        "anthropic/claude-opus-4-6":
+          - model: "anthropic/claude-opus-4-6"
+            threshold: null
+    
+    filters:
+      validateModels:
+        - "smart"
+        - "tim"
+        - "ollama/*"
+        - "anthropic/claude-haiku-4-6"
+      
+      skipIf:
+        questionLengthLessThan: 20
+        containsKeywords:
+          - "hello"
+          - "hi"
+          - "thanks"
+          - "thank you"
+          - "bye"
+    
+    metrics:
+      enabled: true
+      port: 9090
+      path: "/metrics"
+      labels:
+        realm: "roundtable"
+        deployment: "production"
+    
+    logging:
+      level: "info"
+      format: "json"
+      validationLog:
+        enabled: false
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: squire
+  namespace: ai
+  labels:
+    app: squire
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: squire
+  template:
+    metadata:
+      labels:
+        app: squire
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: squire
+        image: ghcr.io/dapperdivers/squire:latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 4001
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: SQUIRE_CONFIG
+          value: "/etc/squire/squire.yaml"
+        - name: LITELLM_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: litellm-secret
+              key: LITELLM_MASTER_KEY
+        - name: REALM
+          value: "roundtable"
+        - name: DEPLOYMENT
+          value: "production"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/squire
+          readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 4001
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 3
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 4001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+      volumes:
+      - name: config
+        configMap:
+          name: squire-config
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: squire
+  namespace: ai
+  labels:
+    app: squire
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 4001
+    targetPort: 4001
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+  selector:
+    app: squire
