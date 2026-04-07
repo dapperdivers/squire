@@ -4,7 +4,8 @@ import { createLogger } from './logger.js';
 import { createMetrics } from './metrics.js';
 import { executeWithEscalation } from './judge.js';
 import type { ChatRequest } from './judge.js';
-import fs from 'fs';
+import fs from 'fs/promises';
+import { existsSync, mkdirSync } from 'fs';
 
 const config = loadConfig();
 const logger = createLogger(config.logging.level, config.logging.format);
@@ -30,7 +31,7 @@ app.post('/v1/chat/completions', async (req, res) => {
   try {
     const result = await executeWithEscalation(request, config, logger, metrics);
     
-    // Log validation decision
+    // Log validation decision (async, don't block response)
     if (config.logging.validationLog.enabled && result.finalScore !== null) {
       const logEntry = {
         timestamp: new Date().toISOString(),
@@ -41,18 +42,21 @@ app.post('/v1/chat/completions', async (req, res) => {
         response: result.response.choices[0]?.message?.content || '',
       };
       
-      try {
-        const logDir = config.logging.validationLog.path.split('/').slice(0, -1).join('/');
-        if (logDir && !fs.existsSync(logDir)) {
-          fs.mkdirSync(logDir, { recursive: true });
+      // Fire and forget - don't await
+      (async () => {
+        try {
+          const logDir = config.logging.validationLog.path.split('/').slice(0, -1).join('/');
+          if (logDir && !existsSync(logDir)) {
+            mkdirSync(logDir, { recursive: true });
+          }
+          await fs.appendFile(
+            config.logging.validationLog.path, 
+            JSON.stringify(logEntry) + '\n'
+          );
+        } catch (e) {
+          logger.warn({ error: e }, 'Failed to write validation log');
         }
-        fs.appendFileSync(
-          config.logging.validationLog.path, 
-          JSON.stringify(logEntry) + '\n'
-        );
-      } catch (e) {
-        logger.warn({ error: e }, 'Failed to write validation log');
-      }
+      })();
     }
     
     res.json(result.response);
